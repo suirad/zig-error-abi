@@ -28,6 +28,7 @@ pub fn errorHash(comptime err: anyerror) u32 {
     comptime {
         for (errname) |c| {
             ret += c;
+            ret += @truncate(u8, ret);
         }
     }
     return ret;
@@ -38,6 +39,7 @@ pub fn errorHash(comptime err: anyerror) u32 {
 /// if so, return the actual error.
 /// If the error that was returned is unknown, then returns error.UnknownExternalError.
 pub fn errorUnwrap(comptime errset: type, comptime T: type, result: ErrorVal(T)) !T {
+    comptime checkForCollisions(errset);
     if (result.err == 0) {
         return result.val;
     }
@@ -53,8 +55,8 @@ pub fn errorUnwrap(comptime errset: type, comptime T: type, result: ErrorVal(T))
 
 /// Wraps a result from a fn that can error and returns a errorval
 pub fn errorWrap(comptime errset: type, comptime T: type, val: errset!T) ErrorVal(T) {
+    comptime checkForCollisions(errset);
     var res = ErrorVal(T).init();
-    //var s: u32 = val;
     if (val) |actual_val| {
         res.val = actual_val;
     } else |thiserr| {
@@ -67,6 +69,23 @@ pub fn errorWrap(comptime errset: type, comptime T: type, val: errset!T) ErrorVa
         }
     }
     return res;
+}
+
+fn checkForCollisions(comptime errset: type) void {
+    comptime {
+        const errs = std.meta.fields(errset);
+        for (errs) |err1, i| {
+            const errval1 = @intToError(err1.value);
+            for (errs) |err2, j| {
+                if (i == j) continue;
+                const errval2 = @intToError(err2.value);
+                if (errorHash(errval1) == errorHash(errval2)) {
+                    const msg = "Hash collision of error." ++ err1.name ++ " and error." ++ err2.name;
+                    @compileError(msg);
+                }
+            }
+        }
+    }
 }
 
 // Error set to test with
@@ -94,9 +113,21 @@ test "exported error" {
     expect(ret.val == 0);
 }
 
-test "errorHash" {
+const Collisions = error{
+    abcd,
+    abdc,
+    dcba,
+    cdba,
+};
+
+test "errorHash and collisions" {
     const hash = errorHash(error.LameError);
-    expect(hash == 905);
+    expect(hash == 1968);
+
+    checkForCollisions(Collisions);
+    expect(errorHash(error.abcd) != errorHash(error.abdc));
+    expect(errorHash(error.abcd) != errorHash(error.dcba));
+    expect(errorHash(error.abcd) != errorHash(error.cdba));
 }
 
 test "errorWrap/errorUnwrap" {
